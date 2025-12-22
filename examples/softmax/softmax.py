@@ -1,5 +1,5 @@
-import json
-import gzip
+import torch
+from torchvision import datasets, transforms
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -31,35 +31,25 @@ def set_chinese_font():
 # 在脚本开始时设置字体
 set_chinese_font()
 
-# --- 2. 数据加载与预处理（json.gz 方式） ---
-datafile = '../../data/mnist.json.gz'
-print(f'正在从 {datafile} 中加载数据......')
+# --- 2. 数据加载与预处理 ---
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+train_data = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+test_data  = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
 
-with gzip.open(datafile, 'rb') as f:
-    data = json.load(f)
+X_train_full = train_data.data.numpy().reshape(-1, 28*28).astype("float32") / 255.0
+y_train_full = train_data.targets.numpy()
+X_test       = test_data.data.numpy().reshape(-1, 28*28).astype("float32") / 255.0
+y_test       = test_data.targets.numpy()
 
-print('MNIST 数据集加载完成')
-
-# 解包数据
-train_set, val_set, test_set = data
-
-X_train_full, y_train_full = train_set
-X_val, y_val = val_set
-X_test, y_test = test_set
-
-# 转 numpy + 展平 + 归一化
-X_train = np.array(X_train_full).reshape(len(X_train_full), -1).astype(np.float32)
-X_val   = np.array(X_val).reshape(len(X_val), -1).astype(np.float32)
-X_test  = np.array(X_test).reshape(len(X_test), -1).astype(np.float32)
-
-y_train = np.array(y_train_full)
-y_val   = np.array(y_val)
-y_test  = np.array(y_test)
+X_val, y_val   = X_train_full[50000:], y_train_full[50000:]
+X_train, y_train = X_train_full[:50000], y_train_full[:50000]
 
 print(f"训练集大小: {X_train.shape}")
 print(f"验证集大小: {X_val.shape}")
 print(f"测试集大小: {X_test.shape}")
-
 
 # --- 3. Softmax 类 ---
 class NumpySoftmax:
