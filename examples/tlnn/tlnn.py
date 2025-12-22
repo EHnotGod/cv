@@ -1,7 +1,6 @@
 import numpy as np
-from sklearn.datasets import fetch_openml
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
+import json
+import gzip
 import time
 import matplotlib.pyplot as plt
 import matplotlib
@@ -310,53 +309,52 @@ class TwoLayerMLP:
 
 def load_mnist_data():
     """
-    加载并预处理 MNIST 数据集。
+    从本目录下的 mnist.json.gz 加载 MNIST 数据集
+    数据格式: (train_set, val_set, test_set)
     """
-    print("正在加载 MNIST 数据集 (可能需要几分钟)...")
-    # 1. 加载数据 (70000 个样本, 28x28=784 个特征)
-    # as_frame=False 确保返回 numpy 数组
-    # data_home 指定缓存目录
-    X, y = fetch_openml('mnist_784', version=1, return_X_y=True, as_frame=False, data_home='./mnist_cache', parser='liac-arff')
-    print("数据加载完毕。")
+    datafile = './mnist.json.gz'
+    print('正在从 {} 中加载数据......'.format(datafile))
 
-    # 2. 归一化 (Normalization)
-    # 对应理论基础：第9节（虽然我们没实现BN/LN，但输入归一化是必须的）
-    # 将像素值从 [0, 255] 缩放到 [0, 1]
-    X = X / 255.0
-    
-    # 3. 划分训练集和测试集 (MNIST 传统划分：60000 训练, 10000 测试)
-    X_train, X_test = X[:60000], X[60000:]
-    y_train_labels, y_test_labels = y[:60000], y[60000:]
-    
-    # 确保 y 是整数类型，以便 OneHotEncoder 使用
-    y_train_labels = y_train_labels.astype(int)
-    y_test_labels = y_test_labels.astype(int)
+    # 加载 json.gz 数据
+    with gzip.open(datafile, 'rb') as f:
+        train_set, val_set, test_set = json.load(f)
 
-    # 4. One-Hot 编码
-    # 将 (m,) 的标签 [7, 2, 1, ...] 转换为 (m, 10) 的矩阵
-    # [[0,0,0,0,0,0,0,1,0,0],
-    #  [0,0,1,0,0,0,0,0,0,0],
-    #  [0,1,0,0,0,0,0,0,0,0], ...]
-    encoder = OneHotEncoder(sparse_output=False, categories='auto')
-    # Reshape(-1, 1) 是因为 encoder 需要 (m, 1) 的输入
-    Y_train_onehot = encoder.fit_transform(y_train_labels.reshape(-1, 1))
-    Y_test_onehot = encoder.transform(y_test_labels.reshape(-1, 1))
+    print('MNIST 数据集加载完成')
 
-    # 5. 调整数据形状 (重要！)
-    # 我们的网络需要 (features, m) 而不是 (m, features)
-    # (60000, 784) -> (784, 60000)
+    X_train, y_train = train_set
+    X_test, y_test = test_set
+
+    # 为了演示快一点，只用一部分数据
+    index = 10000
+    X_train, y_train = X_train[:index], y_train[:index]
+    X_test, y_test = X_test[:index], y_test[:index]
+
+    # 转 numpy + 展平 + 归一化
+    X_train = np.array(X_train).reshape(len(X_train), -1).astype(np.float32) / 255.0
+    X_test = np.array(X_test).reshape(len(X_test), -1).astype(np.float32) / 255.0
+    y_train = np.array(y_train, dtype=np.int64)
+    y_test = np.array(y_test, dtype=np.int64)
+
+    # One-hot 编码（手写，避免 sklearn）
+    num_classes = 10
+    Y_train_onehot = np.zeros((len(y_train), num_classes))
+    Y_train_onehot[np.arange(len(y_train)), y_train] = 1
+
+    Y_test_onehot = np.zeros((len(y_test), num_classes))
+    Y_test_onehot[np.arange(len(y_test)), y_test] = 1
+
+    # 转置为网络需要的形状 (features, m)
     X_train_T = X_train.T
     X_test_T = X_test.T
-    # (60000, 10) -> (10, 60000)
     Y_train_onehot_T = Y_train_onehot.T
     Y_test_onehot_T = Y_test_onehot.T
 
     print(f"X_train 形状: {X_train_T.shape}")
     print(f"Y_train (one-hot) 形状: {Y_train_onehot_T.shape}")
     print(f"X_test 形状: {X_test_T.shape}")
-    print(f"Y_test (原始标签) 形状: {y_test_labels.shape}")
-    
-    return X_train_T, Y_train_onehot_T, X_test_T, y_test_labels, Y_test_onehot_T
+    print(f"y_test 形状: {y_test.shape}")
+
+    return X_train_T, Y_train_onehot_T, X_test_T, y_test, Y_test_onehot_T
 
 # --- 4. 辅助函数：可视化 ---
 
