@@ -4,7 +4,7 @@ import cupy as np
 import json
 import gzip
 # ========== 1. 读取 MNIST ==========
-datafile = './mnist.json.gz'
+datafile = '../../data/mnist.json.gz'
 print('正在从 {} 中加载数据......'.format(datafile))
 # 加载json数据文件
 data = json.load(gzip.open(datafile))
@@ -18,8 +18,8 @@ index = 10000
 X_train, y_train = X_train[:index], y_train[:index]
 X_test, y_test = X_test[:index], y_test[:index]
 # 展平并归一化
-X_train = np.array(X_train).reshape(len(X_train), -1).astype(np.float32) / 255.0
-X_test = np.array(X_test).reshape(len(X_test), -1).astype(np.float32) / 255.0
+X_train = np.array(X_train).reshape(len(X_train), -1).astype(np.float32)
+X_test = np.array(X_test).reshape(len(X_test), -1).astype(np.float32)
 y_train = np.array(y_train); y_test = np.array(y_test)
 # ========== 2. 实现纯 NumPy KNN ==========
 class KNN:

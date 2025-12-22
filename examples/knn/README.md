@@ -14,9 +14,9 @@ KNN（k-Nearest Neighbors）算法在 MNIST 手写数字数据集上的最小可
 ```text
 knn/
 ├── KNN.py            # KNN 实现与主程序
-├── mnist.json.gz     # MNIST 数据
 └── requirements.txt  # 依赖
 ```
+MNIST数据集在主目录的data文件夹下
 
 环境要求
 `
