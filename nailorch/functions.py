@@ -156,7 +156,7 @@ class GetItemGrad(Function):
         if xp is np:
             np.add.at(gx, self.slices, gy)
         else:
-            xp.scatter_add(gx, self.slices, gy)
+            xp.add.at(gx, self.slices, gy)
         return gx
 
     def backward(self, ggx):
@@ -256,23 +256,42 @@ mean = average
 
 class MatMul(Function):
     def forward(self, x, W):
-        y = x.dot(W)
+        xp = cuda.get_array_module(x)
+        y = xp.matmul(x, W)
         return y
 
     def backward(self, gy):
         x, W = self.inputs
-        gx = matmul(gy, W.T)
-        gW = matmul(x.T, gy)
+
+        axes_x = list(range(x.ndim - 2)) + [x.ndim - 1, x.ndim - 2] if x.ndim >= 2 else None
+        axes_W = list(range(W.ndim - 2)) + [W.ndim - 1, W.ndim - 2] if W.ndim >= 2 else None
+
+        if axes_x is not None:
+            x_t = x.transpose(*axes_x)
+        else:
+            x_t = x
+
+        if axes_W is not None:
+            W_t = W.transpose(*axes_W)
+        else:
+            W_t = W
+
+        gx = matmul(gy, W_t)
+        gW = matmul(x_t, gy)
+
+        gx = None if gx is None else sum_to(gx, x.shape)
+        gW = None if gW is None else sum_to(gW, W.shape)
+
         return gx, gW
 
 
 def matmul(x, W):
     return MatMul()(x, W)
 
-
 class Linear(Function):
     def forward(self, x, W, b):
-        y = x.dot(W)
+        xp = cuda.get_array_module(x)
+        y = xp.matmul(x, W)
         if b is not None:
             y += b
         return y
@@ -280,10 +299,27 @@ class Linear(Function):
     def backward(self, gy):
         x, W, b = self.inputs
         gb = None if b.data is None else sum_to(gy, b.shape)
-        gx = matmul(gy, W.T)
-        gW = matmul(x.T, gy)
-        return gx, gW, gb
 
+        axes_x = list(range(x.ndim - 2)) + [x.ndim - 1, x.ndim - 2] if x.ndim >= 2 else None
+        axes_W = list(range(W.ndim - 2)) + [W.ndim - 1, W.ndim - 2] if W.ndim >= 2 else None
+
+        if axes_x is not None:
+            x_t = x.transpose(*axes_x)
+        else:
+            x_t = x
+
+        if axes_W is not None:
+            W_t = W.transpose(*axes_W)
+        else:
+            W_t = W
+
+        gx = matmul(gy, W_t)
+        gW = matmul(x_t, gy)
+
+        gx = None if gx is None else sum_to(gx, x.shape)
+        gW = None if gW is None else sum_to(gW, W.shape)
+
+        return gx, gW, gb
 
 def linear(x, W, b=None):
     return Linear()(x, W, b)
@@ -341,6 +377,44 @@ class ReLU(Function):
 def relu(x):
     return ReLU()(x)
 
+class GeLU(Function):
+    def forward(self, x):
+        xp = cuda.get_array_module(x)
+
+        a = xp.array(0.044715, dtype=x.dtype)
+        s = xp.array(xp.sqrt(2.0 / xp.pi), dtype=x.dtype)
+
+        u = s * (x + a * x**3)
+        y = 0.5 * x * (1.0 + xp.tanh(u))
+
+        self.u = u
+        self.s = s
+        return y
+
+    def backward(self, gy):
+        x_var, = self.inputs
+        x = x_var.data
+        xp = cuda.get_array_module(x)
+
+        u = self.u
+        s = self.s
+
+        tanh_u = xp.tanh(u)
+        sech2_u = 1.0 - tanh_u**2
+
+        a = 0.044715
+        du_dx = s * (1.0 + 3.0 * a * x**2)
+
+        gelu_grad = 0.5 * (1.0 + tanh_u) + 0.5 * x * sech2_u * du_dx
+
+        return gy * gelu_grad
+
+def gelu(x):
+    return GeLU()(x)
+
+def silu(x):
+    # DDPM常用的激活函数 SiLU (Swish): x * sigmoid(x)
+    return x * sigmoid(x)
 
 def softmax_simple(x, axis=1):
     x = as_variable(x)
@@ -595,13 +669,96 @@ class BatchNorm(Function):
         return gx, ggamma, gbeta
 
 
-def batch_nrom(x, gamma, beta, mean, var, decay=0.9, eps=2e-5):
+def batch_norm(x, gamma, beta, mean, var, decay=0.9, eps=2e-5):
     return BatchNorm(mean, var, decay, eps)(x, gamma, beta)
+
+
+class LayerNorm(Function):
+    def __init__(self, eps=1e-5):
+        self.eps = eps
+
+    def forward(self, x, gamma, beta):
+
+        xp = cuda.get_array_module(x)
+        mean = x.mean(axis=-1, keepdims=True)
+        var = x.var(axis=-1, keepdims=True)
+        std = xp.sqrt(var + self.eps)
+        x_hat = (x - mean) / std
+
+        self.std = std
+        self.mean = mean
+        self.x_hat = x_hat
+
+        return gamma * x_hat + beta
+
+    def backward(self, gy):
+        x_var, gamma_var, beta_var = self.inputs
+        gamma = gamma_var.data
+        axes = tuple(range(gy.ndim - 1))
+
+        dgamma = (gy * self.x_hat).sum(axis=axes)
+        dbeta = gy.sum(axis=axes)
+        gx_hat = gy * gamma
+        mean_gxhat = mean(gx_hat, axis=-1, keepdims=True)
+        mean_gxhat_xhat = mean(gx_hat * self.x_hat, axis=-1, keepdims=True)
+        gx = (gx_hat - mean_gxhat - self.x_hat * mean_gxhat_xhat) / self.std
+        return gx, dgamma, dbeta
+def layer_norm(x, gamma, beta, eps=1e-5):
+    return LayerNorm(eps)(x, gamma, beta)
+
 
 
 def embed_id(x, W):
     return W[x]
 
+
+class Split(Function):
+    def __init__(self, n_splits, axis=-1):
+        self.n_splits = int(n_splits)
+        self.axis = int(axis)
+
+    def forward(self, x):
+        xp = cuda.get_array_module(x)
+
+        ax = self.axis if self.axis >= 0 else x.ndim + self.axis
+        self._axis_norm = ax
+
+        ys = xp.split(x, self.n_splits, axis=ax)
+        return tuple(ys)
+
+    def backward(self, *gys):
+        xp = cuda.get_array_module(gys[0].data)
+        pieces = [gy.data for gy in gys]
+        gx_data = xp.concatenate(pieces, axis=self._axis_norm)
+        return as_variable(gx_data)
+
+def split(x, n_splits, axis=-1):
+    return Split(n_splits, axis)(x)
+
+
+class Concat(nailorch.core.Function):
+    def __init__(self, axis=1):
+        self.axis = axis
+
+    def forward(self, *inputs):
+        xp = cuda.get_array_module(inputs[0])
+        self.indices = np.cumsum([x.shape[self.axis] for x in inputs][:-1])
+        return xp.concatenate(inputs, axis=self.axis)
+
+    def backward(self, gy):
+        gy_data = gy.data
+        xp = cuda.get_array_module(gy_data)
+        
+        if xp is np:
+            gxs = np.split(gy_data, self.indices, axis=self.axis)
+        else:
+            gxs = xp.split(gy_data, self.indices, axis=self.axis)
+        
+        # 计算结果是 raw array，反向传播需要返回 Variable
+        return tuple([as_variable(g) for g in gxs])
+
+def concat(inputs, axis=1):
+    return Concat(axis=axis)(*inputs)
 
 # =============================================================================
 # max / min / clip

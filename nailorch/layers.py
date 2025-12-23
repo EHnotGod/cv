@@ -327,5 +327,24 @@ class BatchNorm(Layer):
     def __call__(self, x):
         if self.avg_mean.data is None:
             self._init_params(x)
-        return F.batch_nrom(x, self.gamma, self.beta, self.avg_mean.data,
+        return F.batch_norm(x, self.gamma, self.beta, self.avg_mean.data,
                             self.avg_var.data)
+class LayerNorm(Layer):
+    def __init__(self, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = Parameter(None, name='gamma')
+        self.beta = Parameter(None, name='beta')
+
+    def _init_params(self, x):
+        xp = cuda.get_array_module(x)
+        D = x.shape[-1]
+        if self.gamma.data is None:
+            self.gamma = Parameter(xp.ones(D, dtype=np.float32))
+        if self.beta.data is None:
+            self.beta = Parameter(xp.zeros(D, dtype=np.float32))
+
+    def forward(self, x):
+        if self.gamma.data is None:
+            self._init_params(x)
+        return F.layer_norm(x, self.gamma, self.beta, self.eps)

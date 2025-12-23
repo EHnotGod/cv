@@ -82,7 +82,7 @@ class MNIST(Dataset):
         super().__init__(train, transform, target_transform)
 
     def prepare(self):
-        url = 'http://yann.lecun.com/exdb/mnist/'
+        url = 'https://ossci-datasets.s3.amazonaws.com/mnist/'
         train_files = {'target': 'train-images-idx3-ubyte.gz',
                        'label': 'train-labels-idx1-ubyte.gz'}
         test_files = {'target': 't10k-images-idx3-ubyte.gz',
@@ -94,6 +94,11 @@ class MNIST(Dataset):
 
         self.data = self._load_data(data_path)
         self.label = self._load_label(label_path)
+
+        mask = (self.label == 0)
+        self.data = self.data[mask]
+        self.label = self.label[mask]
+
 
     def _load_label(self, filepath):
         with gzip.open(filepath, 'rb') as f:
